@@ -243,6 +243,54 @@ static bool create_instance(struct LGR_Vulkan * this)
   return true;
 }
 
+static bool create_surface(struct LGR_Vulkan * this, SDL_Window * window)
+{
+  SDL_SysWMinfo info;
+  SDL_VERSION(&info.version);
+  if (!SDL_GetWindowWMInfo(window, &info))
+  {
+    DEBUG_ERROR("Failed to obtain SDL window information");
+    return false;
+  }
+
+  switch(info.subsystem)
+  {
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+    case SDL_SYSWM_X11:
+      {
+        VkXlibSurfaceCreateInfoKHR createInfo;
+        memset(&createInfo, 0, sizeof(VkXlibSurfaceCreateInfoKHR));
+        createInfo.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+        createInfo.dpy    = info.info.x11.display;
+        createInfo.window = info.info.x11.window;
+
+        if (vkCreateXlibSurfaceKHR(this->instance, &createInfo, NULL, &this->surface) != VK_SUCCESS)
+        {
+          DEBUG_ERROR("Failed to create Xlib Surface");
+          return false;
+        }
+        break;
+      }
+#endif
+#if 0
+    case SDL_SYSWM_MIR:
+      break;
+
+    case SDL_SYSWM_WAYLAND:
+      break;
+
+    case SDL_SYSWM_ANDROID:
+      break;
+#endif
+    default:
+      DEBUG_ERROR("Unsupported window subsystem");
+      return false;
+  }
+
+  this->freeSurface = true;
+  return true;
+}
+
 static bool pick_physical_device(struct LGR_Vulkan * this)
 {
   uint32_t deviceCount;
@@ -510,53 +558,5 @@ static bool create_logical_device(struct LGR_Vulkan * this)
 
   vkGetDeviceQueue(this->device, this->queues.graphics, 0, &this->graphics_q);
   vkGetDeviceQueue(this->device, this->queues.present , 0, &this->present_q );
-  return true;
-}
-
-static bool create_surface(struct LGR_Vulkan * this, SDL_Window * window)
-{
-  SDL_SysWMinfo info;
-  SDL_VERSION(&info.version);
-  if (!SDL_GetWindowWMInfo(window, &info))
-  {
-    DEBUG_ERROR("Failed to obtain SDL window information");
-    return false;
-  }
-
-  switch(info.subsystem)
-  {
-#if defined(VK_USE_PLATFORM_XLIB_KHR)
-    case SDL_SYSWM_X11:
-      {
-        VkXlibSurfaceCreateInfoKHR createInfo;
-        memset(&createInfo, 0, sizeof(VkXlibSurfaceCreateInfoKHR));
-        createInfo.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-        createInfo.dpy    = info.info.x11.display;
-        createInfo.window = info.info.x11.window;
-
-        if (vkCreateXlibSurfaceKHR(this->instance, &createInfo, NULL, &this->surface) != VK_SUCCESS)
-        {
-          DEBUG_ERROR("Failed to create Xlib Surface");
-          return false;
-        }
-        break;
-      }
-#endif
-#if 0
-    case SDL_SYSWM_MIR:
-      break;
-
-    case SDL_SYSWM_WAYLAND:
-      break;
-
-    case SDL_SYSWM_ANDROID:
-      break;
-#endif
-    default:
-      DEBUG_ERROR("Unsupported window subsystem");
-      return false;
-  }
-
-  this->freeSurface = true;
   return true;
 }
