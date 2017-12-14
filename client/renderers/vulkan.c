@@ -33,10 +33,13 @@ struct LGR_Vulkan
   LG_RendererParams params;
   bool              configured;
 
+  bool              freeInstance;
   VkInstance        instance;
+  bool              freeDevice;
+  VkDevice          device;
+
   VkPhysicalDevice  physicalDevice;
   QueueIndicies     queues;
-  VkDevice          device;
 };
 
 // forwards
@@ -63,22 +66,10 @@ bool lgr_vulkan_initialize(void ** opaque, const LG_RendererParams params, Uint3
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)*opaque;
   memcpy(&this->params, &params, sizeof(LG_RendererParams));
 
-  if (!create_instance(this))
-    return false;
-
-  while(1)
-  {
-    if (!pick_physical_device(this))
-      break;
-
-    if (!create_logical_device(this))
-      break;
-
-    return true;
-  }
-
-  vkDestroyInstance(this->instance, NULL);
-  return false;
+  return
+    create_instance      (this) &&
+    pick_physical_device (this) &&
+    create_logical_device(this);
 }
 
 bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFormat format)
@@ -93,7 +84,6 @@ bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFo
     return false;
   }
 
-
   this->configured = true;
   return true;
 }
@@ -103,8 +93,6 @@ void lgr_vulkan_deconfigure(void * opaque)
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)opaque;
   if (!this || !this->configured)
     return;
-
-  vkDestroyInstance(this->instance, NULL);
 
   this->configured = false;
 }
@@ -117,6 +105,12 @@ void lgr_vulkan_deinitialize(void * opaque)
 
   if (this->configured)
     lgr_vulkan_deconfigure(opaque);
+
+  if (this->freeDevice)
+    vkDestroyDevice  (this->device  , NULL);
+
+  if (this->freeInstance)
+    vkDestroyInstance(this->instance, NULL);
 
   free(this);
 }
@@ -225,6 +219,7 @@ static bool create_instance(struct LGR_Vulkan * this)
     return false;
   }
 
+  this->freeInstance = true;
   return true;
 }
 
@@ -338,5 +333,38 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
 
 static bool create_logical_device(struct LGR_Vulkan * this)
 {
-  return false;
+  VkDeviceQueueCreateInfo queueInfo;
+  float priority = 1.0f;
+  memset(&queueInfo, 0, sizeof(VkDeviceQueueCreateInfo));
+
+  queueInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  queueInfo.queueFamilyIndex = this->queues.graphics;
+  queueInfo.queueCount       = 1;
+  queueInfo.pQueuePriorities = &priority;
+
+  VkPhysicalDeviceFeatures features;
+  memset(&features, 0, sizeof(VkPhysicalDeviceFeatures));
+
+  const char * extensions[1] =
+  {
+    "VK_KHR_swapchain"
+  };
+
+  VkDeviceCreateInfo createInfo;
+  memset(&createInfo, 0, sizeof(VkDeviceCreateInfo));
+  createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  createInfo.pQueueCreateInfos       = &queueInfo;
+  createInfo.queueCreateInfoCount    = 1;
+  createInfo.pEnabledFeatures        = &features;
+  createInfo.enabledExtensionCount   = 1;
+  createInfo.ppEnabledExtensionNames = extensions;
+
+  if (vkCreateDevice(this->physicalDevice, &createInfo, NULL, &this->device) != VK_SUCCESS)
+  {
+    DEBUG_ERROR("Failed to create the logical device");
+    return false;
+  }
+
+  this->freeDevice = true;
+  return true;
 }
