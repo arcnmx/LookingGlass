@@ -42,6 +42,7 @@ struct LGR_Vulkan
   VkSurfaceKHR      surface;
   bool              freeDevice;
   VkDevice          device;
+  VkPresentModeKHR  presentMode;
 
   VkPhysicalDevice  physicalDevice;
   QueueIndicies     queues;
@@ -276,6 +277,7 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
     VkQueueFamilyProperties queueFamilies[queueFamilyCount];
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &queueFamilyCount, queueFamilies);
 
+    // ensure the device has a graphics and present queues
     bool complete = false;
     this->queues.graphics = -1;
     this->queues.present  = -1;
@@ -304,6 +306,7 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
     if (!complete)
       continue;
 
+    // ensure the device supports swapchain
     uint32_t extensionCount;
     vkEnumerateDeviceExtensionProperties(pd, NULL, &extensionCount, NULL);
     if (!extensionCount)
@@ -325,6 +328,36 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
     if (!complete)
       continue;
 
+    // ensure the device supports the required format
+    uint32_t formatCount;
+    vkGetPhysicalDeviceSurfaceFormatsKHR (pd, this->surface, &formatCount, NULL);
+    if (!formatCount)
+      continue;
+
+    VkSurfaceFormatKHR formats[formatCount];
+    vkGetPhysicalDeviceSurfaceFormatsKHR(pd, this->surface, &formatCount, formats);
+
+    if (formatCount != 1 || formats[0].format != VK_FORMAT_UNDEFINED)
+    {
+      complete = false;
+      for(int i = 0; i < formatCount; ++i)
+      {
+        const VkSurfaceFormatKHR format = formats[i];
+        if (
+          format.format     == VK_FORMAT_B8G8R8A8_UNORM          &&
+          format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+        )
+        {
+          complete = true;
+          break;
+        }
+      }
+
+      if (!complete)
+        continue;
+    }
+
+    // score the device
     switch(properties.deviceType)
     {
       case VK_PHYSICAL_DEVICE_TYPE_OTHER:
@@ -360,6 +393,22 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
       maxScore = scores[i];
   }
 
+  typedef struct
+  {
+    const char       * name;
+    VkPresentModeKHR   mode;
+  }
+  PresentMode;
+
+  static const PresentMode PresentModePrio[] =
+  {
+    { .name = "Mailbox"     , .mode = VK_PRESENT_MODE_MAILBOX_KHR      },
+    { .name = "FIFO Relaxed", .mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR },
+    { .name = "Immediate"   , .mode = VK_PRESENT_MODE_IMMEDIATE_KHR    },
+    { .name = "FIFO"        , .mode = VK_PRESENT_MODE_FIFO_KHR         },
+    { .name = NULL } // sentinal
+  };
+
   this->physicalDevice = VK_NULL_HANDLE;
   for(int i = 0; i < deviceCount; ++i)
     if (scores[i] == maxScore)
@@ -375,6 +424,38 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
       DEBUG_INFO("Device ID     : 0x%x", properties.deviceID                  );
       DEBUG_INFO("Device Name   : %s"  , properties.deviceName                );
       DEBUG_INFO("maxImageDim2D : %d"  , properties.limits.maxImageDimension2D);
+
+      // get the present modes
+      uint32_t presentModeCount;
+      vkGetPhysicalDeviceSurfacePresentModesKHR(this->physicalDevice, this->surface, &presentModeCount, NULL);
+      if (!presentModeCount)
+        continue;
+      VkPresentModeKHR presentModes[presentModeCount];
+      vkGetPhysicalDeviceSurfacePresentModesKHR(this->physicalDevice, this->surface, &presentModeCount, presentModes);
+
+      // find the best match
+      bool found = false;
+      for(int i = 0; PresentModePrio[i].name != NULL; ++i)
+      {
+        for(int c = 0; c < presentModeCount; ++c)
+          if (presentModes[c] == PresentModePrio[i].mode)
+          {
+            found = true;
+            this->presentMode = PresentModePrio[i].mode;
+            DEBUG_INFO("Present Mode  : %s", PresentModePrio[i].name);
+            break;
+          }
+
+        if(found)
+          break;
+      }
+
+      if (!found)
+      {
+        DEBUG_ERROR("Failed to select a present mode");
+        return false;
+      }
+
       break;
     }
 
