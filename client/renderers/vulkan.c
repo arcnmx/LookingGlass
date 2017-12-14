@@ -19,12 +19,15 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 
 #include "lg-renderer.h"
 #include <vulkan/vulkan.h>
+#include <SDL2/SDL_syswm.h>
+#include <X11/Xlib-xcb.h>
 
 #include "debug.h"
 
 typedef struct QueueIndicies
 {
   int graphics;
+  int present;
 }
 QueueIndicies;
 
@@ -35,15 +38,21 @@ struct LGR_Vulkan
 
   bool              freeInstance;
   VkInstance        instance;
+
+  bool              freeSurface;
+  VkSurfaceKHR      surface;
   bool              freeDevice;
   VkDevice          device;
 
   VkPhysicalDevice  physicalDevice;
   QueueIndicies     queues;
+  VkQueue           graphics_q;
+  VkQueue           present_q;
 };
 
 // forwards
 static bool create_instance      (struct LGR_Vulkan * this);
+static bool create_surface       (struct LGR_Vulkan * this, SDL_Window * window);
 static bool pick_physical_device (struct LGR_Vulkan * this);
 static bool create_logical_device(struct LGR_Vulkan * this);
 
@@ -67,9 +76,7 @@ bool lgr_vulkan_initialize(void ** opaque, const LG_RendererParams params, Uint3
   memcpy(&this->params, &params, sizeof(LG_RendererParams));
 
   return
-    create_instance      (this) &&
-    pick_physical_device (this) &&
-    create_logical_device(this);
+    create_instance(this);
 }
 
 bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFormat format)
@@ -84,15 +91,31 @@ bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFo
     return false;
   }
 
-  this->configured = true;
-  return true;
+  this->configured =
+    create_surface       (this, window) &&
+    pick_physical_device (this) &&
+    create_logical_device(this);
+
+  return this->configured;
 }
 
 void lgr_vulkan_deconfigure(void * opaque)
 {
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)opaque;
-  if (!this || !this->configured)
+  if (!this)
     return;
+
+  if (this->freeDevice)
+  {
+    vkDestroyDevice(this->device, NULL);
+    this->freeDevice = false;
+  }
+
+  if (this->freeSurface)
+  {
+    vkDestroySurfaceKHR(this->instance, this->surface, NULL);
+    this->freeSurface = false;
+  }
 
   this->configured = false;
 }
@@ -105,9 +128,6 @@ void lgr_vulkan_deinitialize(void * opaque)
 
   if (this->configured)
     lgr_vulkan_deconfigure(opaque);
-
-  if (this->freeDevice)
-    vkDestroyDevice  (this->device  , NULL);
 
   if (this->freeInstance)
     vkDestroyInstance(this->instance, NULL);
@@ -241,32 +261,69 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
   vkEnumeratePhysicalDevices(this->instance, &deviceCount, physicalDevices);
   for(int i = 0; i < deviceCount; ++i)
   {
-    scores[i] = 0;
+    VkPhysicalDevice           pd = physicalDevices[i];
     VkPhysicalDeviceProperties properties;
     VkPhysicalDeviceFeatures   features;
+    scores[i] = 0;
 
-    vkGetPhysicalDeviceProperties(physicalDevices[i], &properties);
-    vkGetPhysicalDeviceFeatures  (physicalDevices[i], &features  );
+    vkGetPhysicalDeviceProperties(pd, &properties);
+    vkGetPhysicalDeviceFeatures  (pd, &features  );
 
     uint32_t queueFamilyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyCount, NULL);
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &queueFamilyCount, NULL);
     if (!queueFamilyCount)
       continue;
 
     VkQueueFamilyProperties queueFamilies[queueFamilyCount];
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyCount, queueFamilies);
-    bool found = false;
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &queueFamilyCount, queueFamilies);
+
+    bool complete = false;
+    this->queues.graphics = -1;
+    this->queues.present  = -1;
     for(int i = 0; i < queueFamilyCount; ++i)
     {
-      if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-      {
+      const VkQueueFamilyProperties f = queueFamilies[i];
+      if (this->queues.graphics == -1 && f.queueFlags & VK_QUEUE_GRAPHICS_BIT)
         this->queues.graphics = i;
-        found = true;
+
+      if (this->queues.present == -1)
+      {
+        VkBool32 presentSupport = false;
+        vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, this->surface, &presentSupport);
+
+        if (presentSupport)
+          this->queues.present = i;
+      }
+
+      if (this->queues.graphics != -1 && this->queues.present != -1)
+      {
+        complete = true;
         break;
       }
     }
 
-    if (!found)
+    if (!complete)
+      continue;
+
+    uint32_t extensionCount;
+    vkEnumerateDeviceExtensionProperties(pd, NULL, &extensionCount, NULL);
+    if (!extensionCount)
+      continue;
+
+    complete = false;
+    VkExtensionProperties extensions[extensionCount];
+    vkEnumerateDeviceExtensionProperties(pd, NULL, &extensionCount, extensions);
+    for(int i = 0; i < extensionCount; ++i)
+      if (strncmp(
+        extensions[i].extensionName,
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        sizeof(VK_KHR_SWAPCHAIN_EXTENSION_NAME)) == 0)
+      {
+        complete = true;
+        break;
+      }
+
+    if (!complete)
       continue;
 
     switch(properties.deviceType)
@@ -333,28 +390,33 @@ static bool pick_physical_device(struct LGR_Vulkan * this)
 
 static bool create_logical_device(struct LGR_Vulkan * this)
 {
-  VkDeviceQueueCreateInfo queueInfo;
   float priority = 1.0f;
-  memset(&queueInfo, 0, sizeof(VkDeviceQueueCreateInfo));
-
-  queueInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-  queueInfo.queueFamilyIndex = this->queues.graphics;
-  queueInfo.queueCount       = 1;
-  queueInfo.pQueuePriorities = &priority;
+  VkDeviceQueueCreateInfo queueInfo[2] =
+  {
+    {
+      .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = this->queues.graphics,
+      .queueCount       = 1,
+      .pQueuePriorities = &priority
+    },
+    {
+      .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = this->queues.present,
+      .queueCount       = 1,
+      .pQueuePriorities = &priority
+    }
+  };
 
   VkPhysicalDeviceFeatures features;
   memset(&features, 0, sizeof(VkPhysicalDeviceFeatures));
 
-  const char * extensions[1] =
-  {
-    "VK_KHR_swapchain"
-  };
+  const char * extensions[1] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
   VkDeviceCreateInfo createInfo;
   memset(&createInfo, 0, sizeof(VkDeviceCreateInfo));
   createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-  createInfo.pQueueCreateInfos       = &queueInfo;
-  createInfo.queueCreateInfoCount    = 1;
+  createInfo.pQueueCreateInfos       = queueInfo;
+  createInfo.queueCreateInfoCount    = 2;
   createInfo.pEnabledFeatures        = &features;
   createInfo.enabledExtensionCount   = 1;
   createInfo.ppEnabledExtensionNames = extensions;
@@ -364,7 +426,57 @@ static bool create_logical_device(struct LGR_Vulkan * this)
     DEBUG_ERROR("Failed to create the logical device");
     return false;
   }
-
   this->freeDevice = true;
+
+  vkGetDeviceQueue(this->device, this->queues.graphics, 0, &this->graphics_q);
+  vkGetDeviceQueue(this->device, this->queues.present , 0, &this->present_q );
+  return true;
+}
+
+static bool create_surface(struct LGR_Vulkan * this, SDL_Window * window)
+{
+  SDL_SysWMinfo info;
+  SDL_VERSION(&info.version);
+  if (!SDL_GetWindowWMInfo(window, &info))
+  {
+    DEBUG_ERROR("Failed to obtain SDL window information");
+    return false;
+  }
+
+  switch(info.subsystem)
+  {
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+    case SDL_SYSWM_X11:
+      {
+        VkXlibSurfaceCreateInfoKHR createInfo;
+        memset(&createInfo, 0, sizeof(VkXlibSurfaceCreateInfoKHR));
+        createInfo.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+        createInfo.dpy    = info.info.x11.display;
+        createInfo.window = info.info.x11.window;
+
+        if (vkCreateXlibSurfaceKHR(this->instance, &createInfo, NULL, &this->surface) != VK_SUCCESS)
+        {
+          DEBUG_ERROR("Failed to create Xcb Surface");
+          return false;
+        }
+        break;
+      }
+#endif
+#if 0
+    case SDL_SYSWM_MIR:
+      break;
+
+    case SDL_SYSWM_WAYLAND:
+      break;
+
+    case SDL_SYSWM_ANDROID:
+      break;
+#endif
+    default:
+      DEBUG_ERROR("Unsupported window subsystem");
+      return false;
+  }
+
+  this->freeSurface = true;
   return true;
 }

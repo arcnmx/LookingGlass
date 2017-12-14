@@ -6,11 +6,14 @@ CFLAGS  += -ffast-math
 CFLAGS  += -fdata-sections -ffunction-sections
 LDFLAGS += -Wl,--gc-sections
 
-LIBS    = sdl2 SDL2_ttf gl glu libssl openssl spice-protocol fontconfig x11 vulkan
+LIBS    = sdl2 SDL2_ttf gl glu libssl openssl spice-protocol fontconfig x11 x11-xcb vulkan
 CFLAGS  += $(shell pkg-config --cflags $(LIBS))
 LDFLAGS += $(shell pkg-config --libs   $(LIBS))
 BUILD   ?= .build
 BIN     ?= bin
+
+CFLAGS  += -DVK_USE_PLATFORM_XLIB_KHR
+LIBS    += vulkan
 
 CFLAGS  += -DBUILD_VERSION='"$(shell git describe --always --long --dirty --abbrev=10 --tags)"'
 
