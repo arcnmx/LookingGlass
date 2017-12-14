@@ -48,6 +48,9 @@ struct LGR_Vulkan
   QueueIndicies     queues;
   VkQueue           graphics_q;
   VkQueue           present_q;
+
+  bool              freeSwapchain;
+  VkSwapchainKHR    swapchain;
 };
 
 // forwards
@@ -96,6 +99,59 @@ bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFo
     pick_physical_device (this) &&
     create_logical_device(this);
 
+  VkSurfaceCapabilitiesKHR caps;
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(this->physicalDevice, this->surface, &caps);
+
+  int w, h;
+  VkExtent2D extent;
+  SDL_GetWindowSize(window, &w, &h);
+
+  extent.width  = w;
+  extent.height = h;
+
+        if (extent.width  > caps.maxImageExtent.width ) extent.width  = caps.maxImageExtent.width;
+  else {if (extent.width  < caps.minImageExtent.width ) extent.width  = caps.minImageExtent.width;}
+
+        if (extent.height > caps.maxImageExtent.height) extent.height = caps.maxImageExtent.height;
+  else {if (extent.height < caps.minImageExtent.height) extent.height = caps.minImageExtent.height;}
+  DEBUG_INFO("Buffer Extent : %ux%u", extent.width, extent.height);
+
+  VkSwapchainCreateInfoKHR createInfo;
+  memset(&createInfo, 0, sizeof(VkSwapchainCreateInfoKHR));
+  createInfo.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  createInfo.surface          = this->surface;
+  createInfo.minImageCount    = caps.minImageCount;
+  createInfo.imageFormat      = VK_FORMAT_B8G8R8A8_UNORM;
+  createInfo.imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+  createInfo.imageExtent      = extent;
+  createInfo.imageArrayLayers = 1;
+  createInfo.imageUsage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  createInfo.preTransform     = caps.currentTransform;
+  createInfo.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  createInfo.presentMode      = this->presentMode;
+  createInfo.clipped          = VK_TRUE;
+  createInfo.oldSwapchain     = VK_NULL_HANDLE;
+
+  uint32_t queueFamily[2] = { this->queues.graphics, this->queues.present };
+  if (queueFamily[0] == queueFamily[1])
+  {
+    createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  }
+  else
+  {
+    createInfo.imageSharingMode      = VK_SHARING_MODE_CONCURRENT;
+    createInfo.queueFamilyIndexCount = 2;
+    createInfo.pQueueFamilyIndices   = queueFamily;
+  }
+
+  if (vkCreateSwapchainKHR(this->device, &createInfo, NULL, &this->swapchain) != VK_SUCCESS)
+  {
+    DEBUG_ERROR("Failed to create the swap chain");
+    return false;
+  }
+  this->freeSwapchain = true;
+
+
   return this->configured;
 }
 
@@ -104,6 +160,12 @@ void lgr_vulkan_deconfigure(void * opaque)
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)opaque;
   if (!this)
     return;
+
+  if (this->freeSwapchain)
+  {
+    vkDestroySwapchainKHR(this->device, this->swapchain, NULL);
+    this->freeSwapchain = NULL;
+  }
 
   if (this->freeDevice)
   {
