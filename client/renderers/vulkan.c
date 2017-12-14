@@ -20,7 +20,6 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "lg-renderer.h"
 #include <vulkan/vulkan.h>
 #include <SDL2/SDL_syswm.h>
-#include <X11/Xlib-xcb.h>
 
 #include "debug.h"
 
@@ -456,7 +455,7 @@ static bool create_surface(struct LGR_Vulkan * this, SDL_Window * window)
 
         if (vkCreateXlibSurfaceKHR(this->instance, &createInfo, NULL, &this->surface) != VK_SUCCESS)
         {
-          DEBUG_ERROR("Failed to create Xcb Surface");
+          DEBUG_ERROR("Failed to create Xlib Surface");
           return false;
         }
         break;
