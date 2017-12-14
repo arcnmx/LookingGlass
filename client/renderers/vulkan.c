@@ -54,6 +54,7 @@ struct LGR_Vulkan
   VkSwapchainKHR    swapchain;
   uint32_t          imageCount;
   VkImage         * images;
+  VkImageView     * views;
 };
 
 // forwards
@@ -62,6 +63,7 @@ static bool create_surface       (struct LGR_Vulkan * this, SDL_Window * window)
 static bool pick_physical_device (struct LGR_Vulkan * this);
 static bool create_logical_device(struct LGR_Vulkan * this);
 static bool create_swapchain     (struct LGR_Vulkan * this, int w, int h);
+static bool create_image_views   (struct LGR_Vulkan * this);
 
 const char * lgr_vulkan_get_name()
 {
@@ -105,7 +107,8 @@ bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFo
     create_surface       (this, window) &&
     pick_physical_device (this) &&
     create_logical_device(this) &&
-    create_swapchain     (this, w, h);
+    create_swapchain     (this, w, h) &&
+    create_image_views   (this);
 
   return this->configured;
 }
@@ -115,6 +118,14 @@ void lgr_vulkan_deconfigure(void * opaque)
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)opaque;
   if (!this)
     return;
+
+  if (this->views)
+  {
+    for(int i = 0; i < this->imageCount; ++i)
+      vkDestroyImageView(this->device, this->views[i], NULL);
+    free(this->views);
+    this->views = NULL;
+  }
 
   if (this->images)
   {
@@ -644,6 +655,42 @@ static bool create_swapchain(struct LGR_Vulkan * this, int w, int h)
   this->images = (VkImage *)malloc(sizeof(VkImage) * this->imageCount);
   vkGetSwapchainImagesKHR(this->device, this->swapchain, &this->imageCount, this->images);
   DEBUG_INFO("Images        : %d", this->imageCount);
+
+  return true;
+}
+
+static bool create_image_views(struct LGR_Vulkan * this)
+{
+  VkImageViewCreateInfo createInfo =
+  {
+    .sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+    .viewType                        = VK_IMAGE_VIEW_TYPE_2D,
+    .format                          = VK_FORMAT_B8G8R8A8_UNORM,
+    .components.r                    = VK_COMPONENT_SWIZZLE_IDENTITY,
+    .components.g                    = VK_COMPONENT_SWIZZLE_IDENTITY,
+    .components.b                    = VK_COMPONENT_SWIZZLE_IDENTITY,
+    .components.a                    = VK_COMPONENT_SWIZZLE_IDENTITY,
+    .subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+    .subresourceRange.baseMipLevel   = 0,
+    .subresourceRange.levelCount     = 1,
+    .subresourceRange.baseArrayLayer = 0,
+    .subresourceRange.layerCount     = 1,
+  };
+
+  this->views = (VkImageView *)malloc(sizeof(VkImageView) * this->imageCount);
+  for(uint32_t i = 0; i < this->imageCount; ++i)
+  {
+    createInfo.image = this->images[i];
+    if (vkCreateImageView(this->device, &createInfo, NULL, &this->views[i]) != VK_SUCCESS)
+    {
+      DEBUG_ERROR("failed to create image views");
+      for(uint32_t a = 0; a < i; ++a)
+        vkDestroyImageView(this->device, this->views[a], NULL);
+      free(this->views);
+      this->views = NULL;
+      return false;
+    }
+  }
 
   return true;
 }
