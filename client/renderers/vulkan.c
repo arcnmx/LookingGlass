@@ -22,11 +22,27 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 
 #include "debug.h"
 
+typedef struct QueueIndicies
+{
+  int graphics;
+}
+QueueIndicies;
+
 struct LGR_Vulkan
 {
   LG_RendererParams params;
   bool              configured;
+
+  VkInstance        instance;
+  VkPhysicalDevice  physicalDevice;
+  QueueIndicies     queues;
+  VkDevice          device;
 };
+
+// forwards
+static bool create_instance      (struct LGR_Vulkan * this);
+static bool pick_physical_device (struct LGR_Vulkan * this);
+static bool create_logical_device(struct LGR_Vulkan * this);
 
 const char * lgr_vulkan_get_name()
 {
@@ -47,12 +63,39 @@ bool lgr_vulkan_initialize(void ** opaque, const LG_RendererParams params, Uint3
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)*opaque;
   memcpy(&this->params, &params, sizeof(LG_RendererParams));
 
-  return true;
+  if (!create_instance(this))
+    return false;
+
+  while(1)
+  {
+    if (!pick_physical_device(this))
+      break;
+
+    if (!create_logical_device(this))
+      break;
+
+    return true;
+  }
+
+  vkDestroyInstance(this->instance, NULL);
+  return false;
 }
 
 bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFormat format)
 {
-  return false;
+  struct LGR_Vulkan * this = (struct LGR_Vulkan *)opaque;
+  if (!this)
+    return false;
+
+  if (this->configured)
+  {
+    DEBUG_ERROR("Already configured, call deconfigure first");
+    return false;
+  }
+
+
+  this->configured = true;
+  return true;
 }
 
 void lgr_vulkan_deconfigure(void * opaque)
@@ -60,6 +103,8 @@ void lgr_vulkan_deconfigure(void * opaque)
   struct LGR_Vulkan * this = (struct LGR_Vulkan *)opaque;
   if (!this || !this->configured)
     return;
+
+  vkDestroyInstance(this->instance, NULL);
 
   this->configured = false;
 }
@@ -143,3 +188,155 @@ const LG_Renderer LGR_Vulkan =
   .on_frame_event = lgr_vulkan_on_frame_event,
   .render         = lgr_vulkan_render
 };
+
+static bool create_instance(struct LGR_Vulkan * this)
+{
+  VkApplicationInfo appInfo;
+  memset(&appInfo, 0, sizeof(VkApplicationInfo));
+  appInfo.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+  appInfo.pApplicationName   = "Looking Glass";
+  appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+  appInfo.pEngineName        = "No Engine";
+  appInfo.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
+  appInfo.apiVersion         = VK_API_VERSION_1_0;
+
+  const char * extensionNames[2] =
+  {
+    "VK_KHR_surface",
+    "VK_KHR_xlib_surface",
+  };
+
+  const char * layerNames[0] =
+  {
+  };
+
+  VkInstanceCreateInfo createInfo;
+  memset(&createInfo, 0, sizeof(VkInstanceCreateInfo));
+  createInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+  createInfo.pApplicationInfo        = &appInfo;
+  createInfo.enabledExtensionCount   = 2;
+  createInfo.ppEnabledExtensionNames = extensionNames;
+  createInfo.enabledLayerCount       = 0;
+  createInfo.ppEnabledLayerNames     = layerNames;
+
+  if (vkCreateInstance(&createInfo, NULL, &this->instance) != VK_SUCCESS)
+  {
+    DEBUG_ERROR("Failed to create the instance");
+    return false;
+  }
+
+  return true;
+}
+
+static bool pick_physical_device(struct LGR_Vulkan * this)
+{
+  uint32_t deviceCount;
+  vkEnumeratePhysicalDevices(this->instance, &deviceCount, NULL);
+  if (!deviceCount)
+  {
+    DEBUG_ERROR("failed to find a GPU with Vulkan support!");
+    return false;
+  }
+
+  // enumerate the devices and choose one that suits best
+  VkPhysicalDevice physicalDevices[deviceCount];
+  int32_t          scores[deviceCount];
+  int32_t          maxScore = 0;
+
+  vkEnumeratePhysicalDevices(this->instance, &deviceCount, physicalDevices);
+  for(int i = 0; i < deviceCount; ++i)
+  {
+    scores[i] = 0;
+    VkPhysicalDeviceProperties properties;
+    VkPhysicalDeviceFeatures   features;
+
+    vkGetPhysicalDeviceProperties(physicalDevices[i], &properties);
+    vkGetPhysicalDeviceFeatures  (physicalDevices[i], &features  );
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyCount, NULL);
+    if (!queueFamilyCount)
+      continue;
+
+    VkQueueFamilyProperties queueFamilies[queueFamilyCount];
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyCount, queueFamilies);
+    bool found = false;
+    for(int i = 0; i < queueFamilyCount; ++i)
+    {
+      if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+      {
+        this->queues.graphics = i;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found)
+      continue;
+
+    switch(properties.deviceType)
+    {
+      case VK_PHYSICAL_DEVICE_TYPE_OTHER:
+        scores[i] += 100;
+        break;
+
+      case VK_PHYSICAL_DEVICE_TYPE_CPU:
+        scores[i] += 200;
+        break;
+
+      case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+        scores[i] += 300;
+        break;
+
+      case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+        scores[i] += 400;
+        break;
+
+      case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+        scores[i] += 500;
+        break;
+
+      // invalid deviceType
+      default:
+        scores[i] -= 100;
+        break;
+    }
+
+    scores[i] += features.logicOp ? 10 : 0;
+    scores[i] += properties.limits.maxImageDimension2D / 1000;
+
+    if (scores[i] > maxScore)
+      maxScore = scores[i];
+  }
+
+  this->physicalDevice = VK_NULL_HANDLE;
+  for(int i = 0; i < deviceCount; ++i)
+    if (scores[i] == maxScore)
+    {
+      this->physicalDevice = physicalDevices[i];
+      VkPhysicalDeviceProperties properties;
+      vkGetPhysicalDeviceProperties(this->physicalDevice, &properties);
+
+      DEBUG_INFO("Score         : %d"  , scores[i]                            );
+      DEBUG_INFO("API Version   : 0x%x", properties.apiVersion                );
+      DEBUG_INFO("Driver Version: 0x%x", properties.driverVersion             );
+      DEBUG_INFO("Vendor ID     : 0x%x", properties.vendorID                  );
+      DEBUG_INFO("Device ID     : 0x%x", properties.deviceID                  );
+      DEBUG_INFO("Device Name   : %s"  , properties.deviceName                );
+      DEBUG_INFO("maxImageDim2D : %d"  , properties.limits.maxImageDimension2D);
+      break;
+    }
+
+  if (this->physicalDevice == VK_NULL_HANDLE)
+  {
+    DEBUG_ERROR("Suitable GPU not found");
+    return false;
+  }
+
+  return true;
+}
+
+static bool create_logical_device(struct LGR_Vulkan * this)
+{
+  return false;
+}

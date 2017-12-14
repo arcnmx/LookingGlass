@@ -628,6 +628,7 @@ int run()
     sdlFlags      = 0;
     if (!(*r)->initialize(&state.lgrData, lgrParams, &sdlFlags))
     {
+      DEBUG_WARN("%s reported failure to initialize, trying other renderers", (*r)->get_name());
       (*r)->deinitialize(state.lgrData);
       continue;
     }
