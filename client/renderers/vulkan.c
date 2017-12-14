@@ -62,8 +62,8 @@ static bool create_instance      (struct LGR_Vulkan * this);
 static bool create_surface       (struct LGR_Vulkan * this, SDL_Window * window);
 static bool pick_physical_device (struct LGR_Vulkan * this);
 static bool create_logical_device(struct LGR_Vulkan * this);
-static bool create_swapchain     (struct LGR_Vulkan * this, int w, int h);
-static bool create_image_views   (struct LGR_Vulkan * this);
+static bool create_chain         (struct LGR_Vulkan * this, int w, int h);
+static void delete_chain         (struct LGR_Vulkan * this);
 
 const char * lgr_vulkan_get_name()
 {
@@ -107,8 +107,7 @@ bool lgr_vulkan_configure(void * opaque, SDL_Window *window, const LG_RendererFo
     create_surface       (this, window) &&
     pick_physical_device (this) &&
     create_logical_device(this) &&
-    create_swapchain     (this, w, h) &&
-    create_image_views   (this);
+    create_chain         (this, w, h);
 
   return this->configured;
 }
@@ -119,25 +118,7 @@ void lgr_vulkan_deconfigure(void * opaque)
   if (!this)
     return;
 
-  if (this->views)
-  {
-    for(int i = 0; i < this->imageCount; ++i)
-      vkDestroyImageView(this->device, this->views[i], NULL);
-    free(this->views);
-    this->views = NULL;
-  }
-
-  if (this->images)
-  {
-    free(this->images);
-    this->images = NULL;
-  }
-
-  if (this->freeSwapchain)
-  {
-    vkDestroySwapchainKHR(this->device, this->swapchain, NULL);
-    this->freeSwapchain = NULL;
-  }
+  delete_chain(this);
 
   if (this->freeDevice)
   {
@@ -236,6 +217,12 @@ const LG_Renderer LGR_Vulkan =
   .on_frame_event = lgr_vulkan_on_frame_event,
   .render         = lgr_vulkan_render
 };
+
+
+// forwards
+static bool create_swapchain  (struct LGR_Vulkan * this, int w, int h);
+static bool create_image_views(struct LGR_Vulkan * this);
+
 
 static bool create_instance(struct LGR_Vulkan * this)
 {
@@ -593,6 +580,38 @@ static bool create_logical_device(struct LGR_Vulkan * this)
   vkGetDeviceQueue(this->device, this->queues.graphics, 0, &this->graphics_q);
   vkGetDeviceQueue(this->device, this->queues.present , 0, &this->present_q );
   return true;
+}
+
+static bool create_chain(struct LGR_Vulkan * this, int w, int h)
+{
+  vkDeviceWaitIdle(this->device);
+  delete_chain(this);
+
+  return create_swapchain  (this, w, h) &&
+         create_image_views(this);
+}
+
+static void delete_chain(struct LGR_Vulkan * this)
+{
+  if (this->views)
+  {
+    for(int i = 0; i < this->imageCount; ++i)
+      vkDestroyImageView(this->device, this->views[i], NULL);
+    free(this->views);
+    this->views = NULL;
+  }
+
+  if (this->images)
+  {
+    free(this->images);
+    this->images = NULL;
+  }
+
+  if (this->freeSwapchain)
+  {
+    vkDestroySwapchainKHR(this->device, this->swapchain, NULL);
+    this->freeSwapchain = NULL;
+  }
 }
 
 static bool create_swapchain(struct LGR_Vulkan * this, int w, int h)
