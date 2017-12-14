@@ -21,10 +21,11 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 #include "lg-renderer.h"
 
 extern const LG_Renderer LGR_OpenGL;
-extern const LG_Renderer LGR_Basic;
+extern const LG_Renderer LGR_Vulkan;
 
 const LG_Renderer * LG_Renderers[] =
 {
+  &LGR_Vulkan,
   &LGR_OpenGL,
   NULL // end of array sentinal
 };

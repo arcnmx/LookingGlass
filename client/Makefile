@@ -6,7 +6,7 @@ CFLAGS  += -ffast-math
 CFLAGS  += -fdata-sections -ffunction-sections
 LDFLAGS += -Wl,--gc-sections
 
-LIBS    = sdl2 SDL2_ttf gl glu libssl openssl spice-protocol fontconfig x11
+LIBS    = sdl2 SDL2_ttf gl glu libssl openssl spice-protocol fontconfig x11 vulkan
 CFLAGS  += $(shell pkg-config --cflags $(LIBS))
 LDFLAGS += $(shell pkg-config --libs   $(LIBS))
 BUILD   ?= .build
@@ -17,7 +17,8 @@ CFLAGS  += -DBUILD_VERSION='"$(shell git describe --always --long --dirty --abbr
 OBJS	= main.o \
 	  spice/spice.o \
 	  ivshmem/ivshmem.o \
-	  renderers/opengl.o
+	  renderers/opengl.o \
+	  renderers/vulkan.o
 
 BUILD_OBJS = $(foreach obj,$(OBJS),$(BUILD)/$(obj))
 
