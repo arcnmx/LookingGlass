@@ -3,7 +3,7 @@ CFLAGS  = -g -O3 -march=native -Wall -Werror -I./ -I../common # -DDEBUG
 LDFLAGS = -lshlwapi -ldxgi -ld3d11 -lsetupapi -luuid
 
 CFLAGS  += -ffast-math
-CFLAGS  += -fdata-sections -ffunction-sections
+CFLAGS  += -fdata-sections -ffunction-sections -fno-exceptions
 CFLAGS  += -I../ -I.
 LDFLAGS += -Wl,--gc-sections -mwindows
 
@@ -22,6 +22,7 @@ CFLAGS  += -DBUILD_VERSION='"$(shell git describe --always --long --dirty --abbr
 
 OBJS	= main.o \
 	  CrashHandler.o \
+	  New.o \
 	  IVSHMEM.o \
 	  Service.o \
 	  Capture/DXGI.o

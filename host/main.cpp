@@ -29,7 +29,9 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 
 #include <io.h>
 #include <fcntl.h>
+#if !__MINGW32__
 #include <iostream>
+#endif
 
 int parseArgs(struct StartupArgs & args);
 int run(struct StartupArgs & args);
@@ -254,6 +256,7 @@ void setupConsole()
   fp = _fdopen(_conout, "w");
   freopen_s(&fp, "CONOUT$", "w", stderr);
 
+#if !__MINGW32__
   std::ios::sync_with_stdio();
   std::wcout.clear();
   std::cout.clear();
@@ -261,6 +264,7 @@ void setupConsole()
   std::cerr.clear();
   std::wcin.clear();
   std::cin.clear();
+#endif
 
   consoleActive = true;
 }
