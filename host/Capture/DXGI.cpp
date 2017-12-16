@@ -239,6 +239,8 @@ size_t DXGI::GetMaxFrameSize()
 
 GrabStatus DXGI::GrabFrame(FrameInfo & frame)
 {
+  static TimeReport reportGrabFrame("GrabFrame");
+  reportGrabFrame.go();
   if (!m_initialized)
     return GRAB_STATUS_ERROR;
 
@@ -444,6 +446,8 @@ GrabStatus DXGI::GrabFrame(FrameInfo & frame)
 
   unsigned int size = m_height * m_rect.Pitch;
   memcpySSE(frame.buffer, m_rect.pBits, size < frame.bufferSize ? size : frame.bufferSize);
+
+  reportGrabFrame.commit();
 
   return GRAB_STATUS_OK;
 }

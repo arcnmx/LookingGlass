@@ -17,6 +17,7 @@ this program; if not, write to the Free Software Foundation, Inc., 59 Temple
 Place, Suite 330, Boston, MA 02111-1307 USA
 */
 
+#pragma once
 #include <stdio.h>
 
 #if _WIN32
@@ -58,4 +59,46 @@ Place, Suite 330, Boston, MA 02111-1307 USA
   #define DEBUG_PROTO(fmt, args...) DEBUG_PRINT("[P]", fmt, ##args)
 #else
   #define DEBUG_PROTO(fmt, ...) do {} while(0)
+#endif
+
+#if __cplusplus
+class TimeReport {
+	const char* name;
+	unsigned int interval;
+	unsigned int count;
+	unsigned int total;
+	unsigned int start;
+	unsigned int end;
+
+	static unsigned int getTime();
+
+public:
+	TimeReport(const char* name_, unsigned int interval_ = 120) : name(name_), interval(interval_), count(0), total(0), start(0), end(0) { }
+
+	void go() {
+		start = getTime();
+	}
+
+	void lap() {
+		end = getTime();
+	}
+
+	void commit() {
+		if (!end) {
+			lap();
+		}
+
+		count++;
+		total += end - start;
+		end = 0;
+
+		if (count > interval) {
+			float avg = (float)total / (float)count;
+	        DEBUG_INFO("%s: %.2f ms (%.2f FPS)", name, avg, 1000.0f / avg);
+
+			count = 0;
+			total = 0;
+		}
+	}
+};
 #endif

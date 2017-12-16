@@ -21,6 +21,7 @@ CFLAGS  += -DBUILD_VERSION='"$(shell git describe --always --long --dirty --abbr
 
 OBJS	= main.o \
 	  CrashHandler.o \
+	  TimeReport.o \
 	  IVSHMEM.o \
 	  Service.o \
 	  Capture/DXGI.o
