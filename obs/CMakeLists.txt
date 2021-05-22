@@ -15,6 +15,9 @@ if(OPTIMIZE_FOR_NATIVE)
   endif()
 endif()
 
+option(ENABLE_THREADS "Enable multi-threaded implementation" ON)
+add_feature_info(ENABLE_THREADS ENABLE_THREADS "Threading support.")
+
 option(ENABLE_BACKTRACE "Enable backtrace support on crash" ON)
 add_feature_info(ENABLE_BACKTRACE ENABLE_BACKTRACE "Backtrace support.")
 
@@ -64,6 +67,10 @@ target_link_libraries(looking-glass-obs PRIVATE
 	lg_common
 	lgmp
 )
+
+if(ENABLE_THREADS)
+	target_compile_definitions(looking-glass-obs PRIVATE ENABLE_THREADS)
+endif()
 
 install(TARGETS looking-glass-obs
 	LIBRARY DESTINATION ${CMAKE_INSTALL_DATADIR}/obs/obs-plugins/${CMAKE_PROJECT_NAME}/bin/${OBS_PLUGIN_DIR}
