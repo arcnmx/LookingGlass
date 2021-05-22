@@ -15,6 +15,9 @@ if(OPTIMIZE_FOR_NATIVE)
   endif()
 endif()
 
+option(ENABLE_THREADS "Enable multi-threaded implementation" ON)
+add_feature_info(ENABLE_THREADS ENABLE_THREADS "Threading support.")
+
 option(ENABLE_BACKTRACE "Enable backtrace support on crash" ON)
 add_feature_info(ENABLE_BACKTRACE ENABLE_BACKTRACE "Backtrace support.")
 
@@ -68,5 +71,9 @@ target_link_libraries(looking-glass-obs
 	lg_common
 	lgmp
 )
+
+if(ENABLE_THREADS)
+	target_compile_definitions(looking-glass-obs PRIVATE ENABLE_THREADS)
+endif()
 
 feature_summary(WHAT ENABLED_FEATURES DISABLED_FEATURES)

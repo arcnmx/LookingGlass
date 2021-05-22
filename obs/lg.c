@@ -1,7 +1,9 @@
 #define _GNU_SOURCE //needed for pthread_setname_np
 
 #include <obs/obs-module.h>
+#if ENABLE_THREADS
 #include <obs/util/threading.h>
+#endif
 #include <obs/graphics/matrix4.h>
 
 #include <common/ivshmem.h>
@@ -18,7 +20,9 @@ typedef enum
 {
   STATE_STOPPED,
   STATE_OPEN,
+#if ENABLE_THREADS
   STATE_STARTING,
+#endif
   STATE_RUNNING,
   STATE_STOPPING
 }
@@ -40,8 +44,10 @@ typedef struct
   uint8_t         * texData;
   uint32_t          linesize;
 
+#if ENABLE_THREADS
   pthread_t         frameThread, pointerThread;
   os_sem_t        * frameSem;
+#endif
 
   bool                 cursorMono;
   gs_texture_t       * cursorTex;
@@ -49,7 +55,9 @@ typedef struct
 
   bool                 cursorVisible;
   KVMFRCursor          cursor;
+#if ENABLE_THREADS
   os_sem_t           * cursorSem;
+#endif
   atomic_uint          cursorVer;
   unsigned int         cursorCurVer;
   uint32_t             cursorSize;
@@ -68,8 +76,10 @@ static void * lgCreate(obs_data_t * settings, obs_source_t * context)
 {
   LGPlugin * this = bzalloc(sizeof(LGPlugin));
   this->context = context;
+#if ENABLE_THREADS
   os_sem_init (&this->frameSem , 0);
   os_sem_init (&this->cursorSem, 1);
+#endif
   atomic_store(&this->cursorVer, 0);
   lgUpdate(this, settings);
   return this;
@@ -79,21 +89,27 @@ static void deinit(LGPlugin * this)
 {
   switch(this->state)
   {
+#if ENABLE_THREADS
     case STATE_STARTING:
       /* wait for startup to finish */
       while(this->state == STATE_STARTING)
         usleep(1);
+#endif
       /* fallthrough */
 
     case STATE_RUNNING:
     case STATE_STOPPING:
       this->state = STATE_STOPPING;
+#if ENABLE_THREADS
       pthread_join(this->frameThread  , NULL);
       pthread_join(this->pointerThread, NULL);
+#endif
       this->state = STATE_STOPPED;
       /* fallthrough */
 
     case STATE_OPEN:
+      lgmpClientUnsubscribe(&this->pointerQueue);
+      lgmpClientUnsubscribe(&this->frameQueue);
       lgmpClientFree(&this->lgmp);
       ivshmemClose(&this->shmDev);
       break;
@@ -133,8 +149,10 @@ static void lgDestroy(void * data)
 {
   LGPlugin * this = (LGPlugin *)data;
   deinit(this);
+#if ENABLE_THREADS
   os_sem_destroy(this->frameSem );
   os_sem_destroy(this->cursorSem);
+#endif
   bfree(this);
 }
 
@@ -152,17 +170,11 @@ static obs_properties_t * lgGetProperties(void * data)
   return props;
 }
 
+#if ENABLE_THREADS
 static void * frameThread(void * data)
 {
   LGPlugin * this = (LGPlugin *)data;
 
-  if (lgmpClientSubscribe(this->lgmp, LGMP_Q_FRAME, &this->frameQueue) != LGMP_OK)
-  {
-    this->state = STATE_STOPPING;
-    return NULL;
-  }
-
-  this->state = STATE_RUNNING;
   os_sem_post(this->frameSem);
 
   while(this->state == STATE_RUNNING)
@@ -183,10 +195,10 @@ static void * frameThread(void * data)
     usleep(1000);
   }
 
-  lgmpClientUnsubscribe(&this->frameQueue);
   this->state = STATE_STOPPING;
   return NULL;
 }
+#endif
 
 inline static void allocCursorData(LGPlugin * this, const unsigned int size)
 {
@@ -198,18 +210,8 @@ inline static void allocCursorData(LGPlugin * this, const unsigned int size)
   this->cursorData = bmalloc(size);
 }
 
-static void * pointerThread(void * data)
+inline static LGMP_STATUS processCursorData(LGPlugin * this)
 {
-  LGPlugin * this = (LGPlugin *)data;
-
-  if (lgmpClientSubscribe(this->lgmp, LGMP_Q_POINTER, &this->pointerQueue) != LGMP_OK)
-  {
-    this->state = STATE_STOPPING;
-    return NULL;
-  }
-
-  while(this->state == STATE_RUNNING)
-  {
     LGMP_STATUS status;
     LGMPMessage msg;
 
@@ -218,11 +220,10 @@ static void * pointerThread(void * data)
       if (status != LGMP_ERR_QUEUE_EMPTY)
       {
         printf("lgmpClientProcess: %s\n", lgmpStatusString(status));
-        break;
+        return status;
       }
 
-      usleep(1000);
-      continue;
+      return status;
     }
 
     const KVMFRCursor * const cursor = (const KVMFRCursor * const)msg.mem;
@@ -231,7 +232,9 @@ static void * pointerThread(void * data)
 
     if (msg.udata & CURSOR_FLAG_SHAPE)
     {
+#if ENABLE_THREADS
       os_sem_wait(this->cursorSem);
+#endif
       const uint8_t * const data = (const uint8_t * const)(cursor + 1);
       unsigned int dataSize = 0;
 
@@ -290,7 +293,9 @@ static void * pointerThread(void * data)
       this->cursor.height = cursor->height;
 
       atomic_fetch_add_explicit(&this->cursorVer, 1, memory_order_relaxed);
+#if ENABLE_THREADS
       os_sem_post(this->cursorSem);
+#endif
     }
 
     if (msg.udata & CURSOR_FLAG_POSITION)
@@ -300,9 +305,24 @@ static void * pointerThread(void * data)
     }
 
     lgmpClientMessageDone(this->pointerQueue);
-  }
 
-  lgmpClientUnsubscribe(&this->pointerQueue);
+    return status;
+}
+
+#if ENABLE_THREADS
+static void * pointerThread(void * data)
+{
+  LGPlugin * this = (LGPlugin *)data;
+
+  while(this->state == STATE_RUNNING)
+  {
+    LGMP_STATUS status = processCursorData(this);
+    if (status != LGMP_OK) {
+      break;
+    } else if (status == LGMP_ERR_QUEUE_EMPTY) {
+      usleep(1000);
+    }
+  }
 
   bfree(this->cursorData);
   this->cursorData = NULL;
@@ -311,6 +331,7 @@ static void * pointerThread(void * data)
   this->state = STATE_STOPPING;
   return NULL;
 }
+#endif
 
 static void lgUpdate(void * data, obs_data_t * settings)
 {
@@ -346,11 +367,17 @@ static void lgUpdate(void * data, obs_data_t * settings)
     return;
   }
 
-  this->state = STATE_STARTING;
+  if (lgmpClientSubscribe(this->lgmp, LGMP_Q_POINTER, &this->pointerQueue) != LGMP_OK || lgmpClientSubscribe(this->lgmp, LGMP_Q_FRAME, &this->frameQueue) != LGMP_OK) {
+    this->state = STATE_STOPPING;
+  } else {
+    this->state = STATE_RUNNING;
+  }
+#if ENABLE_THREADS
   pthread_create(&this->frameThread, NULL, frameThread, this);
   pthread_setname_np(this->frameThread, "LGFrameThread");
   pthread_create(&this->pointerThread, NULL, pointerThread, this);
   pthread_setname_np(this->pointerThread, "LGPointerThread");
+#endif
 }
 
 static void lgVideoTick(void * data, float seconds)
@@ -363,12 +390,22 @@ static void lgVideoTick(void * data, float seconds)
   LGMP_STATUS status;
   LGMPMessage msg;
 
+#if ENABLE_THREADS
   os_sem_wait(this->frameSem);
   if (this->state != STATE_RUNNING)
   {
     os_sem_post(this->frameSem);
     return;
   }
+#else
+  do {
+    status = processCursorData(this);
+    if (status != LGMP_OK && status != LGMP_ERR_QUEUE_EMPTY) {
+      this->state = STATE_STOPPING;
+      return;
+    }
+  } while (status != LGMP_ERR_QUEUE_EMPTY);
+#endif
 
   this->cursorRect.x = this->cursor.x;
   this->cursorRect.y = this->cursor.y;
@@ -377,7 +414,9 @@ static void lgVideoTick(void * data, float seconds)
   unsigned int cursorVer = atomic_load(&this->cursorVer);
   if (cursorVer != this->cursorCurVer)
   {
+#if ENABLE_THREADS
     os_sem_wait(this->cursorSem);
+#endif
     obs_enter_graphics();
 
     if (this->cursorTex)
@@ -425,7 +464,9 @@ static void lgVideoTick(void * data, float seconds)
     this->cursorRect.cx = this->cursor.width;
     this->cursorRect.cy = this->cursor.height;
 
+#if ENABLE_THREADS
     os_sem_post(this->cursorSem);
+#endif
   }
 
 
@@ -433,7 +474,9 @@ static void lgVideoTick(void * data, float seconds)
   {
     if (status != LGMP_ERR_QUEUE_EMPTY)
     {
+#if ENABLE_THREADS
       os_sem_post(this->frameSem);
+#endif
       printf("lgmpClientAdvanceToLast: %s\n", lgmpStatusString(status));
       return;
     }
@@ -443,13 +486,17 @@ static void lgVideoTick(void * data, float seconds)
   {
     if (status == LGMP_ERR_QUEUE_EMPTY)
     {
+#if ENABLE_THREADS
       os_sem_post(this->frameSem);
+#endif
       return;
     }
 
     printf("lgmpClientProcess: %s\n", lgmpStatusString(status));
     this->state = STATE_STOPPING;
+#if ENABLE_THREADS
     os_sem_post(this->frameSem);
+#endif
     return;
   }
 
@@ -484,7 +531,9 @@ static void lgVideoTick(void * data, float seconds)
 
       default:
         printf("invalid type %d\n", this->type);
+#if ENABLE_THREADS
         os_sem_post(this->frameSem);
+#endif
         obs_leave_graphics();
         return;
     }
@@ -495,7 +544,9 @@ static void lgVideoTick(void * data, float seconds)
     if (!this->texture)
     {
       printf("create texture failed\n");
+#if ENABLE_THREADS
       os_sem_post(this->frameSem);
+#endif
       obs_leave_graphics();
       return;
     }
@@ -518,7 +569,9 @@ static void lgVideoTick(void * data, float seconds)
     );
 
     lgmpClientMessageDone(this->frameQueue);
+#if ENABLE_THREADS
     os_sem_post(this->frameSem);
+#endif
 
     obs_enter_graphics();
     gs_texture_unmap(this->texture);
@@ -528,7 +581,9 @@ static void lgVideoTick(void * data, float seconds)
   else
   {
     lgmpClientMessageDone(this->frameQueue);
+#if ENABLE_THREADS
     os_sem_post(this->frameSem);
+#endif
   }
 }
 
