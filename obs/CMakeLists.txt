@@ -18,7 +18,7 @@ endif()
 option(ENABLE_BACKTRACE "Enable backtrace support on crash" ON)
 add_feature_info(ENABLE_BACKTRACE ENABLE_BACKTRACE "Backtrace support.")
 
-add_compile_options(
+set(C_FLAGS
   "-Wall"
   "-Werror"
   "-Wfatal-errors"
@@ -48,17 +48,6 @@ add_custom_command(
 		${PROJECT_TOP}/version.cmake
 )
 
-include_directories(
-	${PROJECT_SOURCE_DIR}/include
-	${CMAKE_BINARY_DIR}/include
-)
-
-link_libraries(
-	${CMAKE_DL_LIBS}
-	rt
-	m
-)
-
 set(SOURCES
 	${CMAKE_BINARY_DIR}/version.c
 	main.c
@@ -69,7 +58,8 @@ add_subdirectory("${PROJECT_TOP}/common"          "${CMAKE_BINARY_DIR}/common")
 add_subdirectory("${PROJECT_TOP}/repos/LGMP/lgmp" "${CMAKE_BINARY_DIR}/lgmp"  )
 
 add_library(looking-glass-obs SHARED ${SOURCES})
-target_link_libraries(looking-glass-obs
+target_compile_options(looking-glass-obs PRIVATE ${C_FLAGS})
+target_link_libraries(looking-glass-obs PRIVATE
 	${EXE_FLAGS}
 	lg_common
 	lgmp
