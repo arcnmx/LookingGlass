@@ -239,13 +239,17 @@ static void * pointerThread(void * data)
       {
         case CURSOR_TYPE_MASKED_COLOR:
         {
-          dataSize = cursor->height * cursor->pitch;
+          dataSize = cursor->height * cursor->pitch * 2;
           allocCursorData(this, dataSize);
+          memcpy(this->cursorData, data, dataSize / 2);
 
           const uint32_t * s = (const uint32_t *)data;
-          uint32_t * d       = this->cursorData;
-          for(int i = 0; i < dataSize; ++i, ++s, ++d)
-            *d = (*s & ~0xFF000000) | (*s & 0xFF000000 ? 0x0 : 0xFF000000);
+          uint32_t * d       = this->cursorData + dataSize / sizeof(uint32_t) / 2;
+          for(int y = 0; y < cursor->height; y++) {
+            for(int x = 0; x < cursor->width; x++, d++, s++) {
+              *d = *s & 0xFF000000 ? 0x0 : 0x00FFFFFF;
+            }
+          }
           break;
         }
 
@@ -389,7 +393,16 @@ static void lgVideoTick(void * data, float seconds)
     switch(this->cursor.type)
     {
       case CURSOR_TYPE_MASKED_COLOR:
-        /* fallthrough */
+        this->cursorMono  = true;
+        this->cursorTex   =
+          gs_texture_create(
+              this->cursor.width,
+              this->cursor.height,
+              GS_BGRX,
+              1,
+              (const uint8_t **)&this->cursorData,
+              GS_DYNAMIC);
+        break;
 
       case CURSOR_TYPE_COLOR:
         this->cursorMono  = false;
