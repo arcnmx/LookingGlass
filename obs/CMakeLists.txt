@@ -18,18 +18,20 @@ endif()
 option(ENABLE_BACKTRACE "Enable backtrace support on crash" ON)
 add_feature_info(ENABLE_BACKTRACE ENABLE_BACKTRACE "Backtrace support.")
 
-add_compile_options(
-  "-Wall"
-  "-Werror"
-  "-Wfatal-errors"
-  "-ffast-math"
-  "-fdata-sections"
-  "-ffunction-sections"
-  "-fpic"
-  "$<$<CONFIG:DEBUG>:-O0;-g3;-ggdb>"
-)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(EXE_FLAGS "-Wl,--gc-sections")
+if(NOT CMAKE_BUILD_TYPE)
+	add_compile_options(
+		"-fdata-sections"
+		"-ffunction-sections"
+		"-Wfatal-errors"
+		"$<$<CONFIG:DEBUG>:-O0;-g3;-ggdb>"
+	)
+	add_link_options(
+		"-Wl,--gc-sections"
+	)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -59,17 +61,6 @@ add_custom_command(
 		${PROJECT_TOP}/version.cmake
 )
 
-include_directories(
-	${PROJECT_SOURCE_DIR}/include
-	${CMAKE_BINARY_DIR}/include
-)
-
-link_libraries(
-	${CMAKE_DL_LIBS}
-	rt
-	m
-)
-
 set(SOURCES
 	${CMAKE_BINARY_DIR}/version.c
 	main.c
@@ -80,8 +71,8 @@ add_subdirectory("${PROJECT_TOP}/common"          "${CMAKE_BINARY_DIR}/common")
 add_subdirectory("${PROJECT_TOP}/repos/LGMP/lgmp" "${CMAKE_BINARY_DIR}/lgmp"  )
 
 add_library(looking-glass-obs SHARED ${SOURCES})
-target_link_libraries(looking-glass-obs
-	${EXE_FLAGS}
+target_compile_options(looking-glass-obs PRIVATE -Wall -Werror)
+target_link_libraries(looking-glass-obs PRIVATE
 	lg_common
 	lgmp
 )

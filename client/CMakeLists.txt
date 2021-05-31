@@ -13,8 +13,6 @@ if(OPTIMIZE_FOR_NATIVE)
   if(COMPILER_SUPPORTS_MARCH_NATIVE)
     add_compile_options("-march=native")
   endif()
-else()
-  add_compile_options("-march=nehalem" "-mtune=generic")
 endif()
 
 option(ENABLE_OPENGL "Enable the OpenGL renderer"       ON)
@@ -48,21 +46,18 @@ if (NOT ENABLE_SDL AND NOT ENABLE_X11 AND NOT ENABLE_WAYLAND)
   message(FATAL_ERROR "One of ENABLE_SDL, ENABLE_X11, or ENABLE_WAYLAND must be on")
 endif()
 
-add_compile_options(
-  "-Wall"
-  "-Wextra"
-  "-Wno-sign-compare"
-  "-Wno-unused-parameter"
-  "$<$<C_COMPILER_ID:GNU>:-Wimplicit-fallthrough=2>"
-  "-Werror"
-  "-Wfatal-errors"
-  "-ffast-math"
-  "-fdata-sections"
-  "-ffunction-sections"
-  "$<$<CONFIG:DEBUG>:-O0;-g3;-ggdb>"
-)
+if(NOT CMAKE_BUILD_TYPE)
+	add_compile_options(
+		"-Wfatal-errors"
+		"-fdata-sections"
+		"-ffunction-sections"
+		"$<$<CONFIG:DEBUG>:-O0;-g3;-ggdb>"
+	)
+	add_link_options(
+		"-Wl,--gc-sections" "-z" "noexecstack"
+	)
+endif()
 
-set(EXE_FLAGS "-Wl,--gc-sections -z noexecstack")
 set(CMAKE_C_STANDARD 11)
 
 if (ENABLE_OPENGL)
@@ -133,7 +128,7 @@ add_subdirectory(renderers)
 add_subdirectory(fonts)
 
 add_executable(looking-glass-client ${SOURCES})
-target_link_libraries(looking-glass-client
+target_link_libraries(looking-glass-client PRIVATE
 	${EXE_FLAGS}
 	lg_common
 	displayservers
@@ -142,7 +137,18 @@ target_link_libraries(looking-glass-client
 	renderers
 	fonts
 )
+target_compile_options(looking-glass-client PRIVATE
+	"-Werror"
+	"-Wall"
+	"-Wextra"
+	"-Wno-sign-compare"
+	"-Wno-unused-parameter"
+	"$<$<C_COMPILER_ID:GNU>:-Wimplicit-fallthrough=2>"
+	"-ffast-math"
+)
 
-install(PROGRAMS ${CMAKE_BINARY_DIR}/looking-glass-client DESTINATION bin/ COMPONENT binary)
+install(TARGETS looking-glass-client
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	COMPONENT binary)
 
 feature_summary(WHAT ENABLED_FEATURES DISABLED_FEATURES)
